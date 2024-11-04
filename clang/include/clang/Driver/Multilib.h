@@ -102,19 +102,19 @@ public:
 raw_ostream &operator<<(raw_ostream &OS, const Multilib &M);
 
 namespace custom_flag {
-struct CustomFlagDeclaration;
-using CustomFlagDeclarationPtr = std::shared_ptr<CustomFlagDeclaration>;
+struct Declaration;
+using DeclarationPtr = std::shared_ptr<Declaration>;
 
-struct CustomFlagValueDetail {
+struct ValueDetail {
   std::string Name;
   std::optional<SmallVector<std::string>> ExtraBuildArgs;
-  CustomFlagDeclarationPtr Decl;
+  DeclarationPtr Decl;
 };
 
-struct CustomFlagDeclaration {
+struct Declaration {
   std::string Name;
-  SmallVector<CustomFlagValueDetail> ValueList;
-  size_t DefaultValueIdx = ~0UL;
+  SmallVector<ValueDetail> ValueList;
+  std::optional<size_t> DefaultValueIdx;
 };
 
 static constexpr StringRef Prefix = "-fmultilib-flag=";
@@ -140,15 +140,15 @@ public:
 private:
   multilib_list Multilibs;
   SmallVector<FlagMatcher> FlagMatchers;
-  SmallVector<custom_flag::CustomFlagDeclarationPtr> CustomFlagDecls;
+  SmallVector<custom_flag::DeclarationPtr> CustomFlagDecls;
   IncludeDirsFunc IncludeCallback;
   IncludeDirsFunc FilePathsCallback;
 
 public:
   MultilibSet() = default;
-  MultilibSet(
-      multilib_list &&Multilibs, SmallVector<FlagMatcher> &&FlagMatchers = {},
-      SmallVector<custom_flag::CustomFlagDeclarationPtr> &&CustomFlagDecls = {})
+  MultilibSet(multilib_list &&Multilibs,
+              SmallVector<FlagMatcher> &&FlagMatchers = {},
+              SmallVector<custom_flag::DeclarationPtr> &&CustomFlagDecls = {})
       : Multilibs(std::move(Multilibs)), FlagMatchers(std::move(FlagMatchers)),
         CustomFlagDecls(std::move(CustomFlagDecls)) {}
 
