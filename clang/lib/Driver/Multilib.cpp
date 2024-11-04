@@ -96,9 +96,9 @@ MultilibSet &MultilibSet::FilterOut(FilterCallback F) {
 
 void MultilibSet::push_back(const Multilib &M) { Multilibs.push_back(M); }
 
-static void WarnUnclaimedMultilibCustomFlags(
+static void DiagnoseUnclaimedMultilibCustomFlags(
     const Driver &D, const SmallVector<StringRef> &UnclaimedCustomFlagValues,
-    const SmallVector<custom_flag::CustomFlagDeclarationPtr> &CustomFlagDecls) {
+    const SmallVector<custom_flag::DeclarationPtr> &CustomFlagDecls) {
   struct EditDistanceInfo {
     StringRef FlagValue;
     unsigned EditDistance;
@@ -120,30 +120,32 @@ static void WarnUnclaimedMultilibCustomFlags(
       }
     }
     if (!BestCandidate)
-      D.Diag(clang::diag::warn_drv_unsupported_opt)
+      D.Diag(clang::diag::err_drv_unsupported_opt)
           << (custom_flag::Prefix + Unclaimed).str();
     else
-      D.Diag(clang::diag::warn_drv_unsupported_opt_with_suggestion)
+      D.Diag(clang::diag::err_drv_unsupported_opt_with_suggestion)
           << (custom_flag::Prefix + Unclaimed).str()
           << (custom_flag::Prefix + BestCandidate->FlagValue).str();
   }
 }
 
 namespace clang::driver::custom_flag {
+// Map implemented using linear searches as the expected size is too small for
+// the overhead of a search tree or a hash table.
 class ValueNameToDetailMap {
-  SmallVector<std::pair<StringRef, const CustomFlagValueDetail *>> Mapping;
+  SmallVector<std::pair<StringRef, const ValueDetail *>> Mapping;
 
 public:
   template <typename It>
   ValueNameToDetailMap(It FlagDeclsBegin, It FlagDeclsEnd) {
     for (auto DeclIt = FlagDeclsBegin; DeclIt != FlagDeclsEnd; ++DeclIt) {
-      const CustomFlagDeclarationPtr &Decl = *DeclIt;
+      const DeclarationPtr &Decl = *DeclIt;
       for (const auto &Value : Decl->ValueList)
         Mapping.emplace_back(Value.Name, &Value);
     }
   }
 
-  const CustomFlagValueDetail *get(StringRef Key) const {
+  const ValueDetail *get(StringRef Key) const {
     auto Iter = llvm::find_if(
         Mapping, [&](const auto &Pair) { return Pair.first == Key; });
     return Iter != Mapping.end() ? Iter->second : nullptr;
@@ -155,8 +157,12 @@ Multilib::flags_list
 MultilibSet::processCustomFlags(const Driver &D,
                                 const Multilib::flags_list &Flags) const {
   Multilib::flags_list Result;
-  SmallVector<const custom_flag::CustomFlagValueDetail *>
-      ClaimedCustomFlagValues;
+
+  // Custom flag values detected in the flags list
+  SmallVector<const custom_flag::ValueDetail *> ClaimedCustomFlagValues;
+
+  // Arguments to -fmultilib-flag=<arg> that don't correspond to any valid
+  // custom flag value. An error will be printed out for each of these.
   SmallVector<StringRef> UnclaimedCustomFlagValueStrs;
 
   const auto ValueNameToValueDetail = custom_flag::ValueNameToDetailMap(
@@ -169,7 +175,7 @@ MultilibSet::processCustomFlags(const Driver &D,
     }
 
     StringRef CustomFlagValueStr = Flag.substr(custom_flag::Prefix.size());
-    const custom_flag::CustomFlagValueDetail *Detail =
+    const custom_flag::ValueDetail *Detail =
         ValueNameToValueDetail.get(CustomFlagValueStr);
     if (Detail)
       ClaimedCustomFlagValues.push_back(Detail);
@@ -177,24 +183,30 @@ MultilibSet::processCustomFlags(const Driver &D,
       UnclaimedCustomFlagValueStrs.push_back(CustomFlagValueStr);
   }
 
-  llvm::SmallSet<custom_flag::CustomFlagDeclarationPtr, 32>
-      TriggeredCustomFlagDecls;
+  // Set of custom flag declarations for which a value was passed in the flags
+  // list. This is used to, firstly, detect multiple values for the same flag
+  // declaration (in this case, the last one wins), and secondly, to detect
+  // which declarations had no value passed in (in this case, the default value
+  // is selected).
+  llvm::SmallSet<custom_flag::DeclarationPtr, 32> TriggeredCustomFlagDecls;
 
+  // Detect multiple values for the same flag declaration. Last one wins.
   for (auto *CustomFlagValue : llvm::reverse(ClaimedCustomFlagValues)) {
     if (!TriggeredCustomFlagDecls.insert(CustomFlagValue->Decl).second)
       continue;
     Result.push_back(std::string(custom_flag::Prefix) + CustomFlagValue->Name);
   }
 
+  // Detect flag declarations with no value passed in. Select default value.
   for (const auto &Decl : CustomFlagDecls) {
     if (TriggeredCustomFlagDecls.contains(Decl))
       continue;
     Result.push_back(std::string(custom_flag::Prefix) +
-                     Decl->ValueList[Decl->DefaultValueIdx].Name);
+                     Decl->ValueList[*Decl->DefaultValueIdx].Name);
   }
 
-  WarnUnclaimedMultilibCustomFlags(D, UnclaimedCustomFlagValueStrs,
-                                   CustomFlagDecls);
+  DiagnoseUnclaimedMultilibCustomFlags(D, UnclaimedCustomFlagValueStrs,
+                                       CustomFlagDecls);
 
   return Result;
 }
@@ -508,7 +520,7 @@ void MultilibSet::print(raw_ostream &OS) const {
         continue;
 
       StringRef CustomFlagValueStr = Flag.substr(custom_flag::Prefix.size());
-      const custom_flag::CustomFlagValueDetail *Detail =
+      const custom_flag::ValueDetail *Detail =
           ValueNameToValueDetail.get(CustomFlagValueStr);
 
       if (!Detail || !Detail->ExtraBuildArgs)

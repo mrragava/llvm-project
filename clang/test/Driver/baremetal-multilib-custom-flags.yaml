@@ -22,11 +22,11 @@
 # CHECK-MULTI-SAME: "-internal-isystem" "[[SYSROOT:[^"]*]]/bin/../lib/clang-runtimes/arm-none-eabi/multithreaded/thumb/v8-m.main/nofp/include"
 # CHECK-MULTI-NEXT: "-L[[SYSROOT]]/bin/../lib/clang-runtimes/arm-none-eabi/multithreaded/thumb/v8-m.main/nofp/lib"
 
-# RUN: %clang --multi-lib-config=%s -no-canonical-prefixes -x c %s -### -o /dev/null 2>&1 \
+# RUN: not %clang --multi-lib-config=%s -no-canonical-prefixes -x c %s -### -o /dev/null 2>&1 \
 # RUN:     --target=thumbv8m.main-none-eabi -mfpu=none -fmultilib-flag=singlethreaded -fmultilib-flag=no-io --sysroot= \
-# RUN:   | FileCheck --check-prefix=CHECK-WARNING %s
-# CHECK-WARNING-DAG: warning: unsupported option '-fmultilib-flag=singlethreaded'
-# CHECK-WARNING-DAG: warning: unsupported option '-fmultilib-flag=no-io'; did you mean '-fmultilib-flag=io-none'?
+# RUN:   | FileCheck --check-prefix=CHECK-ERROR %s
+# CHECK-ERROR-DAG: error: unsupported option '-fmultilib-flag=singlethreaded'
+# CHECK-ERROR-DAG: error: unsupported option '-fmultilib-flag=no-io'; did you mean '-fmultilib-flag=io-none'?
 
 ---
 MultilibVersion: 1.0
