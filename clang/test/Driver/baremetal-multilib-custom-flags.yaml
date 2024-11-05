@@ -28,6 +28,11 @@
 # CHECK-ERROR-DAG: error: unsupported option '-fmultilib-flag=singlethreaded'
 # CHECK-ERROR-DAG: error: unsupported option '-fmultilib-flag=no-io'; did you mean '-fmultilib-flag=io-none'?
 
+# RUN: %clang --multi-lib-config=%s -no-canonical-prefixes -x c %s -### -o /dev/null 2>&1 \
+# RUN:     --target=thumbv8m.main-none-eabi -mfpu=none -print-multi-lib --sysroot= \
+# RUN:   | FileCheck --check-prefix=CHECK-PRINT-MULTI-LIB %s
+# CHECK-PRINT-MULTI-LIB: arm-none-eabi/thumb/v8-m.main/nofp;@-target=thumbv8m.main-unknown-none-eabi@mfpu=none@fmultilib-flag=no-multithreaded@D__SINGLE_THREAD__
+# CHECK-PRINT-MULTI-LIB: arm-none-eabi/multithreaded/thumb/v8-m.main/nofp;@-target=thumbv8m.main-unknown-none-eabi@mfpu=none@fmultilib-flag=multithreaded
 ---
 MultilibVersion: 1.0
 
@@ -47,6 +52,7 @@ Flags:
   - Name: multithreading
     Values:
     - Name: no-multithreaded
+      ExtraBuildArgs: [-D__SINGLE_THREAD__]
     - Name: multithreaded
     Default: no-multithreaded
   - Name: io
