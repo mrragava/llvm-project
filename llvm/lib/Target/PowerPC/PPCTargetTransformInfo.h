@@ -111,9 +111,9 @@ public:
       ArrayRef<const Value *> Args = {},
       const Instruction *CxtI = nullptr) const override;
   InstructionCost
-  getShuffleCost(TTI::ShuffleKind Kind, VectorType *Tp, ArrayRef<int> Mask,
-                 TTI::TargetCostKind CostKind, int Index, VectorType *SubTp,
-                 ArrayRef<const Value *> Args = {},
+  getShuffleCost(TTI::ShuffleKind Kind, VectorType *DstTy, VectorType *SrcTy,
+                 ArrayRef<int> Mask, TTI::TargetCostKind CostKind, int Index,
+                 VectorType *SubTp, ArrayRef<const Value *> Args = {},
                  const Instruction *CxtI = nullptr) const override;
   InstructionCost
   getCastInstrCost(unsigned Opcode, Type *Dst, Type *Src,
@@ -147,8 +147,11 @@ public:
   bool areInlineCompatible(const Function *Caller,
                            const Function *Callee) const override;
   bool areTypesABICompatible(const Function *Caller, const Function *Callee,
-                             const ArrayRef<Type *> &Types) const override;
+                             ArrayRef<Type *> Types) const override;
   bool supportsTailCallFor(const CallBase *CB) const override;
+
+  TargetTransformInfo::VPLegalization
+  getVPLegalizationStrategy(const VPIntrinsic &PI) const override;
 
 private:
   // The following constant is used for estimating costs on power9.

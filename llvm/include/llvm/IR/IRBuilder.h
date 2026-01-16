@@ -812,15 +812,10 @@ public:
   LLVM_ABI CallInst *CreateFPMinimumReduce(Value *Src);
 
   /// Create a lifetime.start intrinsic.
-  ///
-  /// If the pointer isn't i8* it will be converted.
-  LLVM_ABI CallInst *CreateLifetimeStart(Value *Ptr,
-                                         ConstantInt *Size = nullptr);
+  LLVM_ABI CallInst *CreateLifetimeStart(Value *Ptr);
 
   /// Create a lifetime.end intrinsic.
-  ///
-  /// If the pointer isn't i8* it will be converted.
-  LLVM_ABI CallInst *CreateLifetimeEnd(Value *Ptr, ConstantInt *Size = nullptr);
+  LLVM_ABI CallInst *CreateLifetimeEnd(Value *Ptr);
 
   /// Create a call to invariant.start intrinsic.
   ///
@@ -960,16 +955,18 @@ public:
                                               const Twine &Name = "");
 
   /// Create a call to llvm.vscale.<Ty>().
-  LLVM_ABI Value *CreateVScale(Type *Ty, const Twine &Name = "") {
+  Value *CreateVScale(Type *Ty, const Twine &Name = "") {
     return CreateIntrinsic(Intrinsic::vscale, {Ty}, {}, {}, Name);
   }
 
   /// Create an expression which evaluates to the number of elements in \p EC
-  /// at runtime.
+  /// at runtime. This can result in poison if type \p Ty is not big enough to
+  /// hold the value.
   LLVM_ABI Value *CreateElementCount(Type *Ty, ElementCount EC);
 
   /// Create an expression which evaluates to the number of units in \p Size
-  /// at runtime.  This works for both units of bits and bytes.
+  /// at runtime. This works for both units of bits and bytes. This can result
+  /// in poison if type \p Ty is not big enough to hold the value.
   LLVM_ABI Value *CreateTypeSize(Type *Ty, TypeSize Size);
 
   /// Creates a vector of type \p DstType with the linear sequence <0, 1, ...>
@@ -1573,10 +1570,14 @@ public:
     return Accum;
   }
 
-  Value *CreateOr(Value *LHS, Value *RHS, const Twine &Name = "") {
+  Value *CreateOr(Value *LHS, Value *RHS, const Twine &Name = "",
+                  bool IsDisjoint = false) {
     if (auto *V = Folder.FoldBinOp(Instruction::Or, LHS, RHS))
       return V;
-    return Insert(BinaryOperator::CreateOr(LHS, RHS), Name);
+    return Insert(
+        IsDisjoint ? BinaryOperator::CreateDisjoint(Instruction::Or, LHS, RHS)
+                   : BinaryOperator::CreateOr(LHS, RHS),
+        Name);
   }
 
   Value *CreateOr(Value *LHS, const APInt &RHS, const Twine &Name = "") {
@@ -1721,16 +1722,19 @@ public:
     return Insert(BinOp, Name);
   }
 
-  Value *CreateLogicalAnd(Value *Cond1, Value *Cond2, const Twine &Name = "") {
+  Value *CreateLogicalAnd(Value *Cond1, Value *Cond2, const Twine &Name = "",
+                          Instruction *MDFrom = nullptr) {
     assert(Cond2->getType()->isIntOrIntVectorTy(1));
     return CreateSelect(Cond1, Cond2,
-                        ConstantInt::getNullValue(Cond2->getType()), Name);
+                        ConstantInt::getNullValue(Cond2->getType()), Name,
+                        MDFrom);
   }
 
-  Value *CreateLogicalOr(Value *Cond1, Value *Cond2, const Twine &Name = "") {
+  Value *CreateLogicalOr(Value *Cond1, Value *Cond2, const Twine &Name = "",
+                         Instruction *MDFrom = nullptr) {
     assert(Cond2->getType()->isIntOrIntVectorTy(1));
     return CreateSelect(Cond1, ConstantInt::getAllOnesValue(Cond2->getType()),
-                        Cond2, Name);
+                        Cond2, Name, MDFrom);
   }
 
   Value *CreateLogicalOp(Instruction::BinaryOps Opc, Value *Cond1, Value *Cond2,
@@ -1935,21 +1939,13 @@ public:
   Value *CreateConstGEP1_32(Type *Ty, Value *Ptr, unsigned Idx0,
                             const Twine &Name = "") {
     Value *Idx = ConstantInt::get(Type::getInt32Ty(Context), Idx0);
-
-    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idx, GEPNoWrapFlags::none()))
-      return V;
-
-    return Insert(GetElementPtrInst::Create(Ty, Ptr, Idx), Name);
+    return CreateGEP(Ty, Ptr, Idx, Name, GEPNoWrapFlags::none());
   }
 
   Value *CreateConstInBoundsGEP1_32(Type *Ty, Value *Ptr, unsigned Idx0,
                                     const Twine &Name = "") {
     Value *Idx = ConstantInt::get(Type::getInt32Ty(Context), Idx0);
-
-    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idx, GEPNoWrapFlags::inBounds()))
-      return V;
-
-    return Insert(GetElementPtrInst::CreateInBounds(Ty, Ptr, Idx), Name);
+    return CreateGEP(Ty, Ptr, Idx, Name, GEPNoWrapFlags::inBounds());
   }
 
   Value *CreateConstGEP2_32(Type *Ty, Value *Ptr, unsigned Idx0, unsigned Idx1,
@@ -1959,11 +1955,7 @@ public:
       ConstantInt::get(Type::getInt32Ty(Context), Idx0),
       ConstantInt::get(Type::getInt32Ty(Context), Idx1)
     };
-
-    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idxs, NWFlags))
-      return V;
-
-    return Insert(GetElementPtrInst::Create(Ty, Ptr, Idxs, NWFlags), Name);
+    return CreateGEP(Ty, Ptr, Idxs, Name, NWFlags);
   }
 
   Value *CreateConstInBoundsGEP2_32(Type *Ty, Value *Ptr, unsigned Idx0,
@@ -1972,31 +1964,19 @@ public:
       ConstantInt::get(Type::getInt32Ty(Context), Idx0),
       ConstantInt::get(Type::getInt32Ty(Context), Idx1)
     };
-
-    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idxs, GEPNoWrapFlags::inBounds()))
-      return V;
-
-    return Insert(GetElementPtrInst::CreateInBounds(Ty, Ptr, Idxs), Name);
+    return CreateGEP(Ty, Ptr, Idxs, Name, GEPNoWrapFlags::inBounds());
   }
 
   Value *CreateConstGEP1_64(Type *Ty, Value *Ptr, uint64_t Idx0,
                             const Twine &Name = "") {
     Value *Idx = ConstantInt::get(Type::getInt64Ty(Context), Idx0);
-
-    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idx, GEPNoWrapFlags::none()))
-      return V;
-
-    return Insert(GetElementPtrInst::Create(Ty, Ptr, Idx), Name);
+    return CreateGEP(Ty, Ptr, Idx, Name, GEPNoWrapFlags::none());
   }
 
   Value *CreateConstInBoundsGEP1_64(Type *Ty, Value *Ptr, uint64_t Idx0,
                                     const Twine &Name = "") {
     Value *Idx = ConstantInt::get(Type::getInt64Ty(Context), Idx0);
-
-    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idx, GEPNoWrapFlags::inBounds()))
-      return V;
-
-    return Insert(GetElementPtrInst::CreateInBounds(Ty, Ptr, Idx), Name);
+    return CreateGEP(Ty, Ptr, Idx, Name, GEPNoWrapFlags::inBounds());
   }
 
   Value *CreateConstGEP2_64(Type *Ty, Value *Ptr, uint64_t Idx0, uint64_t Idx1,
@@ -2005,11 +1985,7 @@ public:
       ConstantInt::get(Type::getInt64Ty(Context), Idx0),
       ConstantInt::get(Type::getInt64Ty(Context), Idx1)
     };
-
-    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idxs, GEPNoWrapFlags::none()))
-      return V;
-
-    return Insert(GetElementPtrInst::Create(Ty, Ptr, Idxs), Name);
+    return CreateGEP(Ty, Ptr, Idxs, Name, GEPNoWrapFlags::none());
   }
 
   Value *CreateConstInBoundsGEP2_64(Type *Ty, Value *Ptr, uint64_t Idx0,
@@ -2018,11 +1994,7 @@ public:
       ConstantInt::get(Type::getInt64Ty(Context), Idx0),
       ConstantInt::get(Type::getInt64Ty(Context), Idx1)
     };
-
-    if (auto *V = Folder.FoldGEP(Ty, Ptr, Idxs, GEPNoWrapFlags::inBounds()))
-      return V;
-
-    return Insert(GetElementPtrInst::CreateInBounds(Ty, Ptr, Idxs), Name);
+    return CreateGEP(Ty, Ptr, Idxs, Name, GEPNoWrapFlags::inBounds());
   }
 
   Value *CreateStructGEP(Type *Ty, Value *Ptr, unsigned Idx,
@@ -2186,7 +2158,10 @@ public:
     return CreateCast(Instruction::FPExt, V, DestTy, Name, FPMathTag,
                       FMFSource);
   }
-
+  Value *CreatePtrToAddr(Value *V, const Twine &Name = "") {
+    return CreateCast(Instruction::PtrToAddr, V,
+                      BB->getDataLayout().getAddressType(V->getType()), Name);
+  }
   Value *CreatePtrToInt(Value *V, Type *DestTy,
                         const Twine &Name = "") {
     return CreateCast(Instruction::PtrToInt, V, DestTy, Name);
@@ -2541,6 +2516,17 @@ public:
       std::optional<RoundingMode> Rounding = std::nullopt,
       std::optional<fp::ExceptionBehavior> Except = std::nullopt);
 
+  LLVM_ABI Value *CreateSelectWithUnknownProfile(Value *C, Value *True,
+                                                 Value *False,
+                                                 StringRef PassName,
+                                                 const Twine &Name = "");
+
+  LLVM_ABI Value *CreateSelectFMFWithUnknownProfile(Value *C, Value *True,
+                                                    Value *False,
+                                                    FMFSource FMFSource,
+                                                    StringRef PassName,
+                                                    const Twine &Name = "");
+
   LLVM_ABI Value *CreateSelect(Value *C, Value *True, Value *False,
                                const Twine &Name = "",
                                Instruction *MDFrom = nullptr);
@@ -2607,6 +2593,9 @@ public:
                              const Twine &Name = "") {
     return CreateShuffleVector(V, PoisonValue::get(V->getType()), Mask, Name);
   }
+
+  LLVM_ABI Value *CreateVectorInterleave(ArrayRef<Value *> Ops,
+                                         const Twine &Name = "");
 
   Value *CreateExtractValue(Value *Agg, ArrayRef<unsigned> Idxs,
                             const Twine &Name = "") {
